@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="hu">
+
+<head>
+    <meta charset="UTF-8">
+    <title>3×3 Rubik-kocka – Magyarázatokkal</title>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: black;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        #panel {
+            position: fixed;
+            inset-block-start: 1.5rem;
+            inset-inline-start: 1.5rem;
+            background: #222;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            color: white;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
+        #panel.enabled {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        #panel select,
+        #panel button {
+            padding: 5px 10px;
+            background-color: #444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+    </style>
+
+    <!-- importmap a Three.js-hez és a TrackballControls-hoz -->
+    <script async src="https://unpkg.com/es-module-shims@1.7.3/dist/es-module-shims.js"></script>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.154.0/build/three.module.js",
+                "TrackballControls": "https://unpkg.com/three@0.154.0/examples/jsm/controls/TrackballControls.js"
+            }
+        }
+    </script>
+</head>
+
+<body>
+
+    <div id="panel">
+        <label>Tengely</label>
+        <select name="axis" id="axis">
+            <option value="x">X</option>
+            <option value="y">Y</option>
+            <option value="z">Z</option>
+        </select>
+
+        <label>Irány</label>
+        <select name="direction" id="direction">
+            <option value="cw">Óramutató megegyező</option>
+            <option value="ccw">Óramutató ellentétes</option>
+        </select>
+
+        <button id="rotateBtn">Forgatás</button>
+    </div>
+    <script type="module">
+
+        //
+        // ======================================================================
+        //   3×3 RUBIK-KOCKA MAGYARÁZATTAL
+        // ======================================================================
+        //
+
+        import * as THREE from "three";
+        import { TrackballControls } from "TrackballControls";
+
+        // A scene a 3D világ konténere, ebbe helyezünk mindent
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000); // fekete háttér
+
+        // Kamera létrehozása:
+        // - 60 fokos látószög
+        // - képarány: böngészőablak aránya
+        // - közel/távol vágási sík
+        //
+        // Ez lesz a "szemünk", innen nézünk a Rubik-kockára.
+        const camera = new THREE.PerspectiveCamera(
+            60,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+        );
+
+        // A kamera pozíciója (x, y, z).
+        // Picit felülről és oldalról nézünk a kockára.
+        camera.position.set(4, 4, 6);
+
+        // WebGL renderer — ez rajzolja ki a 3D-t a képernyőre.
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+
+        // ======================================================================
+        // 2) VEZÉRLÉS: TRACKBALL-KONTROLL
+        // ======================================================================
+        //
+        // Ez biztosítja, hogy egérrel szabadon tudjunk forgatni a kocka körül.
+        //
+        const controls = new TrackballControls(camera, renderer.domElement);
+        controls.rotateSpeed = 4.0;  // érzékenység
+        controls.zoomSpeed = 1.2;
+        controls.panSpeed = 0.8;
+
+
+        // ======================================================================
+        // 3) FÉNYEK
+        // ======================================================================
+        // Kell egy kis fény, hogy a kockák színei jól látszódjanak.
+        //
+
+        // Egyenletes fény az egész térben
+        const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambient);
+
+        // Irányított fény – ez ad némi árnyékot, élénkséget
+        const dir = new THREE.DirectionalLight(0xffffff, 1);
+        dir.position.set(5, 5, 5);
+        scene.add(dir);
+
+
+        // ======================================================================
+        // 4) 3×3-as RUBIK-KOCKA LÉTREHOZÁSA
+        // ======================================================================
+        //
+        // A Rubik-kocka logikája:
+        // - 3 sor * 3 oszlop * 3 mélység = 27 db mini-kocka
+        // - minden mini-kocka egy 1×1×1-es kocka
+        // - van egy pici rés (gap), hogy szépen elkülönüljenek
+        //
+        // Matematika:
+        //   teljes méret = N * kockaMéret + (N-1) * rés
+        //   pozíció = index * (kockaMéret + rés) - teljesMéret/2 + kockaMéret/2
+        //
+
+        const N = 3;                 // Rubik méret: 3×3×3
+        const cubeSize = 1;          // egy mini-kocka mérete
+        const gap = 0.07;            // hézag a jobb láthatóságért
+
+        // teljes szélesség kiszámítása
+        const totalSize = N * cubeSize + (N - 1) * gap;
+
+        // Színek a Rubik-oldalakhoz
+        const faceColors = {
+            front: 0x00ff00,   // zöld
+            back: 0x0000ff,   // kék
+            left: 0xff8000,   // narancs
+            right: 0xff0000,   // piros
+            top: 0xffffff,   // fehér
+            bottom: 0xffff00    // sárga
+        };
+
+        const outlineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true });
+        const rubikGroup = new THREE.Group();
+        scene.add(rubikGroup);
+
+        const allCubes = [];
+
+
+        // --- mini-kockák létrehozása ---
+        for (let x = 0; x < N; x++) {
+            for (let y = 0; y < N; y++) {
+                for (let z = 0; z < N; z++) {
+
+                    // A kocka helyének matematikai kiszámítása:
+                    const px = x * (cubeSize + gap);
+                    const py = y * (cubeSize + gap);
+                    const pz = z * (cubeSize + gap);
+
+                    // 6 oldalas anyag – minden oldal kap színt
+                    //
+                    // A sorrend a BoxGeometry oldalainak sorrendje:
+                    // 0: RIGHTŁ
+                    // 1: LEFT
+                    // 2: TOP
+                    // 3: BOTTOM
+                    // 4: FRONT
+                    // 5: BACK
+                    //
+                    const materials = [
+                        new THREE.MeshBasicMaterial({ color: faceColors.right }),
+                        new THREE.MeshBasicMaterial({ color: faceColors.left }),
+                        new THREE.MeshBasicMaterial({ color: faceColors.top }),
+                        new THREE.MeshBasicMaterial({ color: faceColors.bottom }),
+                        new THREE.MeshBasicMaterial({ color: faceColors.front }),
+                        new THREE.MeshBasicMaterial({ color: faceColors.back }),
+                    ];
+
+                    const cube = new THREE.Mesh(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize), materials);
+                    cube.position.set(
+                        px - totalSize / 2 + cubeSize / 2,
+                        py - totalSize / 2 + cubeSize / 2,
+                        pz - totalSize / 2 + cubeSize / 2
+                    );
+
+                    cube.userData = { x, y, z, materials }; // tároljuk az indexeket és anyagokat
+                    allCubes.push(cube);
+                    rubikGroup.add(cube);
+                }
+            }
+        }
+
+        const mouse = new THREE.Vector2();
+        const raycaster = new THREE.Raycaster();
+        let selectedAxis = null;
+        let selectedIndex = null;
+
+        function clearHighlight() {
+            allCubes.forEach(c => {
+                c.material = c.userData.materials;
+            });
+            selectedAxis = null;
+            selectedIndex = null;
+            document.getElementById('panel').classList.remove('enabled');
+        }
+
+        window.addEventListener('click', e=>{
+
+            function highlightLayer(axis, index) {
+    allCubes.forEach(c => c.material = c.userData.materials);
+
+    allCubes
+        .filter(c => c.userData[axis] === index)
+        .forEach(c => c.material = outlineMat);
+
+    document.getElementById("panel").classList.add("enabled");
+}
+
+document.getElementById("axis").addEventListener("change", () => {
+    if (selectedIndex === null) return;
+
+    const newAxis = document.getElementById("axis").value;
+
+    let newIndex;
+
+    // Fix logika: ugyanott választunk indexet a másik tengelyen
+    if (newAxis === "x") newIndex = allCubes[selectedIndex]?.userData?.x ?? 0;
+    if (newAxis === "y") newIndex = allCubes[selectedIndex]?.userData?.y ?? 0;
+    if (newAxis === "z") newIndex = allCubes[selectedIndex]?.userData?.z ?? 0;
+
+    selectedAxis = newAxis;
+    selectedIndex = newIndex;
+
+    highlightLayer(selectedAxis, selectedIndex);
+});
+
+window.addEventListener("click", (e) => {
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    const hit = raycaster.intersectObjects(allCubes)[0];
+    if (!hit) return;
+
+    allCubes.forEach(c => c.material = c.userData.materials);
+
+    const d = hit.object.userData;
+    selectedAxis = hit.face.normal.x ? "x" : hit.face.normal.y ? "y" : "z";
+    selectedIndex = d[selectedAxis];
+
+    document.getElementById("axis").value = selectedAxis;
+
+    highlightLayer(selectedAxis, selectedIndex);
+});
+
+            mouse.x = (e.clientX / window.innerWidth) *2 -1
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+
+            const hit = raycaster.intersectObjects(allCubes)[0];
+            if (!hit) return
+            clearHighlight();
+
+            const d = hit.object.userData;
+            //ternary operator
+            selectedAxis = hit.face.normal.x ? "x" : hit.face.normal.y ? "y" : "z";
+
+            /*
+            ez a kettő megegyezik, ugyan az igazából.
+            if(hit.face.normal.x){
+                selectedAxis = "x";
+            } else if(hit.face.normal.y){
+                selectedAxis = "y";
+            } else {
+                selectedAxis = "z";
+            }
+                */
+            selectedIndex = d[selectedAxis];
+
+            allCubes.filter(c=>c.userData[selectedAxis] === selectedIndex).forEach(c=>{
+                c.material = outlineMat;
+            })
+
+            document.getElementById("axis").value = selectedAxis;
+            document.getElementById('panel').classList.add('enabled');
+
+        })
+
+        let rotating = false;
+
+        function rotateLayer(axis, index, cw = "cw") {
+    if (rotating || selectedAxis === null) return;
+    rotating = true;
+
+    const layer = allCubes.filter(c => c.userData[axis] === index);
+
+    const g = new THREE.Group();
+    rubikGroup.add(g);
+
+    layer.forEach(c => {
+        c.parent.remove(c);
+        g.add(c);
+    });
+
+    const dir = cw ? -1 : 1;
+    const target = dir * (Math.PI / 2);
+    let progress = 0;
+
+    function anim() {
+        progress += 0.07;
+        g.rotation[axis] = target * progress;
+
+        if (progress >= 1) {
+            g.rotation[axis] = target;
+
+            const rotAxis =
+                axis === "x" ? new THREE.Vector3(1, 0, 0) :
+                axis === "y" ? new THREE.Vector3(0, 1, 0) :
+                                new THREE.Vector3(0, 0, 1);
+
+            layer.forEach(c => {
+                const m = new THREE.Matrix4().makeRotationAxis(rotAxis, target);
+                c.applyMatrix4(m);
+
+                g.remove(c);
+                rubikGroup.add(c);
+
+                const px = c.position.x + totalSize / 2 - cubeSize / 2;
+                const py = c.position.y + totalSize / 2 - cubeSize / 2;
+                const pz = c.position.z + totalSize / 2 - cubeSize / 2;
+
+                c.userData.x = Math.round(px / (cubeSize + gap));
+                c.userData.y = Math.round(py / (cubeSize + gap));
+                c.userData.z = Math.round(pz / (cubeSize + gap));
+            });
+
+            rubikGroup.remove(g);
+            clearHighlight();
+            rotating = false;
+            return;
+        }
+
+        requestAnimationFrame(anim);
+    }
+    anim();
+}
+
+
+        document.getElementById("rotateBtn").onclick = ()=>{
+            if(selectedAxis === null) return;
+            const axis = document.getElementById("axis").value;
+            const dir = document.getElementById("direction").value === "cw";
+            rotateLayer(axis, selectedIndex, dir);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Trackball frissítése (forgathatóság)
+            controls.update();
+
+            // A jelenet kirajzolása
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+
+        // ======================================================================
+        // 6) ABLAK MÉRET VÁLTOZÁSÁNAK KEZELÉSE
+        // ======================================================================
+        window.addEventListener("resize", () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+
+</body>
+
+</html>
